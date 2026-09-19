@@ -796,6 +796,44 @@ jobs:
             exit 1
           fi
 
+      - name: Verify packaged network configuration
+        shell: bash
+        env:
+          EXPECTED_SERVER: ${{ env.server }}
+          EXPECTED_PORT: ${{ env.serverPort }}
+          EXPECTED_KEY: ${{ env.key }}
+          EXPECTED_APP: ${{ env.appname }}
+          DMG_FILE: ${{ env.filename }}-${{ matrix.job.arch }}.dmg
+        run: |
+          export VERIFY_MOUNT="$RUNNER_TEMP/looptech-verify-${{ matrix.job.arch }}"
+          mkdir -p "$VERIFY_MOUNT"
+          hdiutil attach -readonly -nobrowse -mountpoint "$VERIFY_MOUNT" "$GITHUB_WORKSPACE/$DMG_FILE"
+          trap 'hdiutil detach "$VERIFY_MOUNT"' EXIT
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          app = Path(os.environ['VERIFY_MOUNT']) / (os.environ['EXPECTED_APP'] + '.app')
+          payload = app / 'Contents/Resources/custom_.txt'
+          custom = json.loads(base64.b64decode(payload.read_bytes(), validate=True))
+          expected = {
+              'custom-rendezvous-server': os.environ['EXPECTED_SERVER'] + ':' + os.environ['EXPECTED_PORT'],
+              'relay-server': os.environ['EXPECTED_SERVER'] + ':' + str(int(os.environ['EXPECTED_PORT']) + 1),
+              'key': os.environ['EXPECTED_KEY'],
+          }
+          defaults = custom.get('default-settings', {})
+          overrides = custom.get('override-settings', {})
+          for name, value in expected.items():
+              assert value and defaults.get(name) == value, f'Missing or incorrect network default: {name}'
+              assert overrides.get(name, value) == value, f'Conflicting network override: {name}'
+          binary = (app / 'Contents/Frameworks/liblibrustdesk.dylib').read_bytes()
+          for name in ['EXPECTED_SERVER', 'EXPECTED_KEY']:
+              assert os.environ[name].encode() in binary, f'Compiled configuration missing: {name}'
+          assert b'custom_.txt' in binary, 'Custom configuration loader missing'
+          print('PASS: packaged ID server, relay, public key and compiled defaults verified.')
+          PY
+
       - name: Notarize DMG with notarytool
         if: env.MACOS_P12_BASE64 != '' && env.APPLE_ID != ''
         shell: bash
