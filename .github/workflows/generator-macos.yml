@@ -640,7 +640,24 @@ jobs:
 
       - name: Sign macOS app bundle
         if: env.MACOS_P12_BASE64 != ''
+        shell: bash
+        env:
+          MACOS_P12_PASSWORD: ${{ secrets.MACOS_P12_PASSWORD }}
         run: |
+            sign_with_retry() {
+              local attempt
+              for attempt in 1 2 3; do
+                if rcodesign sign --p12-file certificate.p12 --p12-password "$MACOS_P12_PASSWORD" \
+                  --code-signature-flags runtime "$@"; then
+                  return 0
+                fi
+                if [ "$attempt" -lt 3 ]; then
+                  echo "Signing attempt $attempt failed; retrying with timestamp enabled..."
+                  sleep "$((attempt * 15))"
+                fi
+              done
+              return 1
+            }
             cd flutter/build/macos/Build/Products/Release
             # Debug info
             echo "Current directory contents:"
@@ -658,15 +675,18 @@ jobs:
             ls -la "${{ env.appname }}.app/Contents" || echo "Contents not found"
             
             # Decode the certificate
-            echo "${{ secrets.MACOS_P12_BASE64 }}" | base64 --decode > certificate.p12
+            umask 077
+            printf '%s' "$MACOS_P12_BASE64" | base64 --decode > certificate.p12
+            ENTITLEMENTS_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${{ env.appname }}.app/Contents/Info.plist")
+            codesign -d --entitlements :- "${{ env.appname }}.app/Contents/MacOS/$ENTITLEMENTS_EXECUTABLE" > release-entitlements.plist
+            python3 -c 'import plistlib; p="release-entitlements.plist"; d=plistlib.load(open(p,"rb")); d.pop("com.apple.security.get-task-allow",None); plistlib.dump(d,open(p,"wb"))'
             
             # Sign the app bundle and its contents
             if [ -d "${{ env.appname }}.app/Contents/MacOS" ]; then
               echo "Signing main executable..."
               MAIN_EXECUTABLE="${{ env.appname }}.app/Contents/MacOS/${{ env.appname }}"
               if [ -f "$MAIN_EXECUTABLE" ]; then
-                rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                  --code-signature-flags runtime "$MAIN_EXECUTABLE"
+                sign_with_retry --entitlements-xml-path release-entitlements.plist "$MAIN_EXECUTABLE"
               else
                 echo "Main executable not found at expected path: $MAIN_EXECUTABLE"
                 # Try to find the actual executable
@@ -675,8 +695,7 @@ jobs:
                 ACTUAL_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${{ env.appname }}.app/Contents/Info.plist")
                 if [ -n "$ACTUAL_EXECUTABLE" ]; then
                   echo "Found executable: $ACTUAL_EXECUTABLE"
-                  rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                    --code-signature-flags runtime "${{ env.appname }}.app/Contents/MacOS/$ACTUAL_EXECUTABLE"
+                  sign_with_retry --entitlements-xml-path release-entitlements.plist "${{ env.appname }}.app/Contents/MacOS/$ACTUAL_EXECUTABLE"
                 fi
               fi
               
@@ -684,16 +703,16 @@ jobs:
               while IFS= read -r -d '' BINARY; do
                 case "$(file -b "$BINARY")" in
                   *Mach-O*)
-                    rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                      --code-signature-flags runtime "$BINARY"
+                    sign_with_retry "$BINARY"
                     ;;
                 esac
               done < <(find "${{ env.appname }}.app/Contents/Frameworks" -type f -not -name ".*" -print0)
               
               echo "Signing main bundle..."
-              rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                --code-signature-flags runtime "${{ env.appname }}.app"
+              sign_with_retry --entitlements-xml-path "Contents/MacOS/$ENTITLEMENTS_EXECUTABLE:release-entitlements.plist" "${{ env.appname }}.app"
               codesign --verify --deep --strict --verbose=2 "${{ env.appname }}.app"
+              codesign -d --entitlements :- "${{ env.appname }}.app/Contents/MacOS/$ENTITLEMENTS_EXECUTABLE" > signed-entitlements.plist
+              python3 -c 'import plistlib; expected=plistlib.load(open("release-entitlements.plist","rb")); actual=plistlib.load(open("signed-entitlements.plist","rb")); assert actual == expected, "Signed entitlements differ from release entitlements"; assert "com.apple.security.get-task-allow" not in actual, "Debug entitlement must not be shipped"'
             else
               echo "Error: Invalid app bundle structure"
               exit 1
@@ -784,11 +803,25 @@ jobs:
           cd $GITHUB_WORKSPACE
           DMG="${{ env.filename }}-${{ matrix.job.arch }}.dmg"
           echo "Notarizing $DMG ..."
+          SUBMIT_EXIT=0
           xcrun notarytool submit "$DMG" \
-            --apple-id "${{ env.APPLE_ID }}" \
-            --password "${{ env.APPLE_ID_PASSWORD }}" \
-            --team-id "${{ env.APPLE_TEAM_ID }}" \
-            --wait
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --output-format json > notarization-result.json || SUBMIT_EXIT=$?
+          cat notarization-result.json
+          SUBMISSION_ID=$(python3 -c 'import json; print(json.load(open("notarization-result.json")).get("id", ""))')
+          STATUS=$(python3 -c 'import json; print(json.load(open("notarization-result.json")).get("status", ""))')
+          if [ "$SUBMIT_EXIT" -ne 0 ] || [ "$STATUS" != "Accepted" ]; then
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_ID_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID"
+            fi
+            echo "::error::Notarization was not accepted; refusing publication."
+            exit 1
+          fi
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
           echo "Notarization complete: $DMG"
