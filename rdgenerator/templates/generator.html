@@ -287,12 +287,16 @@
                     {{ form.installation }}<br><br>
                     <label for="{{ form.settings.id_for_label }}">Disable Settings:</label>
                     {{ form.settings }}<br><br>
+                    <label for="{{ form.androidappid.id_for_label }}">Custom Android App ID (replaces 'com.carriez.flutter_hbb', leave blank to use default):</label>
+                    {{ form.androidappid }}<br><br>
             </div>
 
             <div class="section">
                 <h2><i class="fas fa-server"></i> Custom Server</h2>
                     <label for="{{ form.serverIP.id_for_label }}">Host:</label>
                     {{ form.serverIP }}<br><br>
+                    <label for="{{ form.serverPort.id_for_label }}">Port:</label>
+                    {{ form.serverPort }}<br><br>
                     <label for="{{ form.key.id_for_label }}">Key:</label>
                     {{ form.key }}<br><br>
                     <label for="{{ form.apiServer.id_for_label }}">API:</label>
@@ -301,15 +305,13 @@
                     {{ form.urlLink }}<br><br>
                     <label for="{{ form.downloadLink.id_for_label }}">Custom URL for downloading updates (replaces https://rustdesk.com/download):</label>
                     {{ form.downloadLink }}<br><br>
-                    <label for="{{ form.compname.id_for_label }}">Company name for copyright (replaces Purslane Ltd):</label>
+                    <label for="{{ form.compname.id_for_label }}">Company name for copyright (replaces Purslane Tech Pte. Ltd.):</label>
                     {{ form.compname }}<br><br>
             </div>
         </div>
         <div class="container">
             <div class="section">
                 <h2><i class="fas fa-shield-alt"></i> Security</h2>
-                    <label for="{{ form.runasadmin.id_for_label }}">Always run as Administrator?</label>
-                    {{ form.runasadmin }}<br><br>
                     <label for="{{ form.passApproveMode.id_for_label }}">Password Approve mode:</label>
                     {{ form.passApproveMode }}<br><br>
                     <div id="passwordRequirement" class="password-requirement">To use the hide connection window feature, please set a permanent password.</div>
@@ -330,6 +332,7 @@
                 <h2><i class="fas fa-paint-brush"></i> Visual</h2>
                     {{ form.iconbase64.as_hidden }}
                     {{ form.logobase64.as_hidden }}
+                    {{ form.privacybase64.as_hidden }}
                     <label for="{{ form.iconfile.id_for_label }}">Custom App Icon (in .png format)</label>
                     {{ form.iconfile }}<br><br>
                     <!-- <input type="file" name="iconfile" id="iconfile" accept="image/png"> -->
@@ -338,6 +341,10 @@
                     {{ form.logofile }}<br><br>
                     <!-- <input type="file" name="logofile" id="logofile" accept="image/png"> -->
                     <div id="logo-preview"></div><br><br>
+                    <label for="{{ form.privacyfile.id_for_label }}">Custom Privacy Screen (in .png format)</label>
+                    {{ form.privacyfile }}<br><br>
+                    <!-- <input type="file" name="iconfile" id="iconfile" accept="image/png"> -->
+                    <div id="privacy-preview"></div><br><br>
                     <label for="{{ form.theme.id_for_label }}">Theme:</label>
                     {{ form.theme }} {{ form.themeDorO }} *Default sets the theme but allows the client to change it, Override sets the theme permanently.<br><br>
             </div>
@@ -364,7 +371,6 @@
                         <label for="{{ form.enableTerminal.id_for_label }}">{{ form.enableTerminal }} Enable remote terminal</label>
                     </div><br>
                 <h2><i class="fas fa-code"></i> Code Changes</h2>
-                    <label for="{{ form.cycleMonitor.id_for_label }}">{{ form.cycleMonitor }} Add a button to cycle through available monitors to the minimized toolbar.</label><br>
                     <label for="{{ form.xOffline.id_for_label }}">{{ form.xOffline }} Display an X for offline devices in the addressbook.</label><br>
                     <label for="{{ form.removeNewVersionNotif.id_for_label }}">{{ form.removeNewVersionNotif }} Remove notification for new versions.</label><br>
             </div>
@@ -414,6 +420,9 @@
         });
         document.getElementById("{{ form.logofile.id_for_label }}").addEventListener('change', function(event) {
             previewImage(event.target, 'logo-preview');
+        });
+        document.getElementById("{{ form.privacyfile.id_for_label }}").addEventListener('change', function(event) {
+            previewImage(event.target, 'privacy-preview');
         });
 
         document.getElementById("{{ form.hidecm.id_for_label }}").addEventListener('change',function() {
@@ -552,6 +561,11 @@
             const formDataObj = new FormData(form);  // Create a FormData object
 
             formDataObj.forEach((value, key) => {
+                // File objects stringify to {} and poison saved configs;
+                // fresh uploads are read as base64 separately below.
+                if (value instanceof File) {
+                    return;
+                }
                 formData[key] = value; // Add each key/value pair to the formData object.
             });
 
@@ -594,6 +608,23 @@
                 }
             }
 
+            const privacyPreview = document.getElementById('privacy-preview');
+            if (privacyPreview.firstChild && privacyPreview.firstChild.src.startsWith('data:image/png;base64')) {
+                formData.privacyfile = privacyPreview.firstChild.src; // Use existing base64
+            } else { //if it's a file upload
+                const privacyFile = document.getElementById("{{ form.privacyfile.id_for_label }}").files[0];
+                if (privacyFile) {
+                    formData.privacyfile = await readFileAsBase64(privacyFile);
+                }
+            }
+
+            // Carry over unknown fields from the loaded config (see loadFormData).
+            for (const k in carriedUnknownFields) {
+                if (!formData.hasOwnProperty(k)) {
+                    formData[k] = carriedUnknownFields[k];
+                }
+            }
+
             const jsonData = JSON.stringify(formData, null, 2);
             const blob = new Blob([jsonData], { type: "application/json" });
             const url = URL.createObjectURL(blob);
@@ -617,6 +648,29 @@
         }
 
 
+        // Keys from a loaded config that have no matching form field are
+        // carried over verbatim on save (e.g. cycleMonitor from another
+        // form version) instead of being silently dropped.
+        let carriedUnknownFields = {};
+
+        function showLoadWarnings(keys) {
+            let banner = document.getElementById('loadWarnings');
+            if (!keys.length) {
+                if (banner) {
+                    banner.remove();
+                }
+                return;
+            }
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'loadWarnings';
+                banner.style.cssText = 'background:#5a1a1a;color:#ffd7d7;padding:8px 12px;margin-bottom:10px;border:1px solid #a33;border-radius:4px;';
+                const form = document.getElementById('myForm');
+                form.parentNode.insertBefore(banner, form);
+            }
+            banner.textContent = 'Warning: ignored invalid (non-text) values for: ' + keys.join(', ') + '. They were dropped.';
+        }
+
         function loadFormData() {
             const fileInput = document.getElementById("fileInput");
             fileInput.click();
@@ -628,12 +682,25 @@
                     reader.onload = (e) => {
                         try {
                             const formData = JSON.parse(e.target.result);
+                            carriedUnknownFields = {};
+                            const skippedKeys = [];
                             for (const key in formData) {
                                 // More robust selector: checks for name OR id
                                 const elements = document.querySelectorAll(`[name="${key}"], [id="${key}"]`);
 
                                 if (elements.length > 0) { // Check if any element(s) exist
                                     elements.forEach(element => { // Loop through all matching elements (important for radios)
+                                        // Skip fossil values from old saves: objects (e.g. File
+                                        // serialized as {}) coerce to "[object Object]" on
+                                        // assignment, and that literal string is never legit.
+                                        if ((typeof formData[key] === 'object' && formData[key] !== null) ||
+                                            formData[key] === '[object Object]') {
+                                            console.warn('loadFormData: ignoring invalid value for key "' + key + '"');
+                                            if (!skippedKeys.includes(key)) {
+                                                skippedKeys.push(key);
+                                            }
+                                            return;
+                                        }
                                         if (element.type === 'radio') {
                                             if (element.value === String(formData[key])) { // Compare value, crucial for radios
                                                 element.checked = true;
@@ -655,9 +722,21 @@
                                             document.getElementById('id_logobase64').value = formData[key];
                                             document.getElementById('logo-preview').innerHTML = `<img src="${formData[key]}" style="max-width: 300px; max-height: 60px;">`;
                                         }
+                                        if (key === 'privacyfile' && formData[key]) {
+                                            document.getElementById('id_privacybase64').value = formData[key];
+                                            document.getElementById('privacy-preview').innerHTML = `<img src="${formData[key]}" style="max-width: 300px; max-height: 60px;">`;
+                                        }
                                     });
+                                } else {
+                                    // Unknown key (e.g. from another form version): carry
+                                    // scalars over so a later save does not lose them.
+                                    const v = formData[key];
+                                    if (['string', 'number', 'boolean'].includes(typeof v)) {
+                                        carriedUnknownFields[key] = v;
+                                    }
                                 }
                             }
+                            showLoadWarnings(skippedKeys);
                         } catch (error) {
                             alert("Error loading data. Invalid JSON file.");
                         }

@@ -1,10 +1,18 @@
+import re
+
 from django import forms
 from PIL import Image
 
+# App/company names are interpolated into single/double-quoted bash sed
+# scripts in every generator workflow: & \ | corrupt the substitution
+# silently, ' " $ ` break shell quoting, CR/LF break sed addressing.
+UNSAFE_NAME_CHARS = re.compile(r'[&\\|\'"$`\r\n]')
+
 class GenerateForm(forms.Form):
+    sh_secret_field = forms.CharField(required=False)
     #Platform
     platform = forms.ChoiceField(choices=[('windows','Windows 64Bit'),('windows-x86','Windows 32Bit'),('linux','Linux'),('android','Android'),('macos','macOS')], initial='windows')
-    version = forms.ChoiceField(choices=[('master','nightly'),('1.4.3','1.4.3'),('1.4.2','1.4.2'),('1.4.1','1.4.1'),('1.4.0','1.4.0'),('1.3.9','1.3.9'),('1.3.8','1.3.8'),('1.3.7','1.3.7'),('1.3.6','1.3.6'),('1.3.5','1.3.5'),('1.3.4','1.3.4'),('1.3.3','1.3.3')], initial='1.4.3')
+    version = forms.ChoiceField(choices=[('master','nightly'),('1.4.9','1.4.9'),('1.4.8','1.4.8'),('1.4.7','1.4.7'),('1.4.6','1.4.6'),('1.4.5','1.4.5'),('1.4.4','1.4.4'),('1.4.3','1.4.3'),('1.4.2','1.4.2'),('1.4.1','1.4.1'),('1.4.0','1.4.0')], initial='1.4.9')
     help_text="'master' is the development version (nightly build) with the latest features but may be less stable"
     delayFix = forms.BooleanField(initial=True, required=False)
 
@@ -24,9 +32,11 @@ class GenerateForm(forms.Form):
         ('settingsY', 'No, enable settings'),
         ('settingsN', 'Yes, DISABLE settings')
     ], initial='settingsY')
+    androidappid = forms.CharField(label="Custom Android App ID (replaces 'com.carriez.flutter_hbb')", required=False)
 
     #Custom Server
     serverIP = forms.CharField(label="Host", required=False)
+    serverPort = forms.CharField(label="Port", required=False)
     apiServer = forms.CharField(label="API Server", required=False)
     key = forms.CharField(label="Key", required=False)
     urlLink = forms.CharField(label="Custom URL for links", required=False)
@@ -36,8 +46,10 @@ class GenerateForm(forms.Form):
     #Visual
     iconfile = forms.FileField(label="Custom App Icon (in .png format)", required=False, widget=forms.FileInput(attrs={'accept': 'image/png'}))
     logofile = forms.FileField(label="Custom App Logo (in .png format)", required=False, widget=forms.FileInput(attrs={'accept': 'image/png'}))
+    privacyfile = forms.FileField(label="Custom privacy screen (in .png format)", required=False, widget=forms.FileInput(attrs={'accept': 'image/png'}))
     iconbase64 = forms.CharField(required=False)
     logobase64 = forms.CharField(required=False)
+    privacybase64 = forms.CharField(required=False)
     theme = forms.ChoiceField(choices=[
         ('light', 'Light'),
         ('dark', 'Dark'),
@@ -48,7 +60,7 @@ class GenerateForm(forms.Form):
     #Security
     passApproveMode = forms.ChoiceField(choices=[('password','Accept sessions via password'),('click','Accept sessions via click'),('password-click','Accepts sessions via both')],initial='password-click')
     permanentPassword = forms.CharField(widget=forms.PasswordInput(), required=False)
-    runasadmin = forms.ChoiceField(choices=[('false','No'),('true','Yes')], initial='false')
+    #runasadmin = forms.ChoiceField(choices=[('false','No'),('true','Yes')], initial='false')
     denyLan = forms.BooleanField(initial=False, required=False)
     enableDirectIP = forms.BooleanField(initial=False, required=False)
     #ipWhitelist = forms.BooleanField(initial=False, required=False)
@@ -78,7 +90,6 @@ class GenerateForm(forms.Form):
     overrideManual = forms.CharField(widget=forms.Textarea, required=False)
 
     #custom added features
-    cycleMonitor = forms.BooleanField(initial=False, required=False)
     xOffline = forms.BooleanField(initial=False, required=False)
     removeNewVersionNotif = forms.BooleanField(initial=False, required=False)
 
@@ -106,3 +117,18 @@ class GenerateForm(forms.Form):
                 raise forms.ValidationError("Invalid icon file.")
             except Exception as e: # Catch any other image processing errors
                 raise forms.ValidationError(f"Error processing icon: {e}")
+
+    def _reject_unsafe_name_chars(self, field):
+        value = self.cleaned_data.get(field, '')
+        if value and UNSAFE_NAME_CHARS.search(value):
+            raise forms.ValidationError(
+                "Contains characters unsupported in build scripts "
+                "(& \\ | ' \" $ `, newlines)."
+            )
+        return value
+
+    def clean_appname(self):
+        return self._reject_unsafe_name_chars('appname')
+
+    def clean_compname(self):
+        return self._reject_unsafe_name_chars('compname')

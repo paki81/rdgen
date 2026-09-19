@@ -20,13 +20,35 @@
    * Now click New repository secret
    * Set the Name to GENURL
    * Set the Secret to https://rdgen.hostname.com (or whatever your server will be accessed from)
+   * Now click New repository secret again
+   * Set the Name to ZIP_PASSWORD
+   * Set the Secret to any password you want (use this in the next step as well) - generate a password by running: ```python3 -c 'import secrets; print(secrets.token_hex(100))'```
 4. Now download the docker-compose.yml file and fill in the environment variables:
   * SECRET_KEY="your secret key" - generate a secret key by running: ```python3 -c 'import secrets; print(secrets.token_hex(100))'```
   * GHUSER="your github username"  
   * GHBEARER="your fine-grained access token"  
+  * ZIP_PASSWORD="the same password that you entered as a github secret"
   * PROTOCOL="https" *optional - defaults to "https", change to "http" if you need to
   * REPONAME="rdgen" *optional - defaults to "rdgen", change this if you renamed the repo when you forked it
 5. Now just run ```docker compose up -d```
+
+
+## Use a self hosted github runner for faster client generation (Windows only right now)
+
+1. First you need to set up a Windows computer that can build rustdesk
+2. Once you can build rustdesk, follow github instructions for setting up a self hosted github runner
+3. Now you need to add an environment variable SH_SECRET, which has a key/password that you will need to send to the server
+4. Save a json configuration file from your rdgen web ui
+5. Use the [rdgen-cli] (https://github.com/AlekseyLapunov/rdgen-cli) to submit your json configuration with the added key "sh_secret_field" with the value matching your SH_SECRET
+
+## Use your own Windows code signing token
+
+1. You will need a USB signing token plugged into a Windows computer
+2. On the computer with the USB signing token, you need to make sure it is set up correctly to sign using signtool.exe
+3. Run a small [signing api](https://github.com/bryangerlach/signing_api) server on the computer with the USB token connected. Follow the setup instructions for this server.
+4. Now for your rdgen repo, add github secrets for 
+   - SIGN_BASE_URL (the accesible over the internet URL for the signing api server)
+   - SIGN_API_KEY (the api key you have set on your signing api server)
 
 
 ## Host manually:
