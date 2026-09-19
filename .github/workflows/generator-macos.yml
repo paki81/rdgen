@@ -13,6 +13,11 @@ on:
         required: true
         default: ''
         type: string
+      diagnostic_submission_id:
+        description: 'Retrieve an existing Apple notarization log without building'
+        required: false
+        default: ''
+        type: string
 
 env:
   SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
@@ -43,12 +48,28 @@ env:
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
 
 jobs:
+  notarization-diagnostics:
+    if: inputs.diagnostic_submission_id != ''
+    runs-on: macos-14
+    steps:
+      - name: Retrieve Apple notarization report
+        shell: bash
+        env:
+          SUBMISSION_ID: ${{ inputs.diagnostic_submission_id }}
+        run: |
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
   setup:
+    if: inputs.diagnostic_submission_id == ''
     uses: ./.github/workflows/fetch-encrypted-secrets.yml
     with:
       zip_url_json: ${{ inputs.zip_url }}
 
   generate-bridge:
+    if: inputs.diagnostic_submission_id == ''
     uses: ./.github/workflows/bridge.yml
     with:
       version: ${{ inputs.version }}
@@ -798,7 +819,7 @@ jobs:
     needs: [build-for-macos]
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: always()
+    if: always() && inputs.diagnostic_submission_id == ''
     steps:
       - name: Delete secrets artifact
         uses: geekyeggo/delete-artifact@v5
