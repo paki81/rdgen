@@ -36,6 +36,9 @@ env:
   #signing keys env variable checks
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
+  APPLE_ID: "${{ secrets.APPLE_ID }}"
+  APPLE_ID_PASSWORD: "${{ secrets.APPLE_ID_PASSWORD }}"
+  APPLE_TEAM_ID: "${{ secrets.APPLE_TEAM_ID }}"
   UPLOAD_ARTIFACT: 'true'
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
 
@@ -743,6 +746,21 @@ jobs:
             echo "No DMG file found matching the pattern"
             exit 1
           fi
+
+      - name: Notarize DMG with notarytool
+        if: env.MACOS_P12_BASE64 != '' && env.APPLE_ID != ''
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE
+          DMG="${{ env.filename }}-${{ matrix.job.arch }}.dmg"
+          echo "Notarizing $DMG ..."
+          xcrun notarytool submit "$DMG" \
+            --apple-id "${{ env.APPLE_ID }}" \
+            --password "${{ env.APPLE_ID_PASSWORD }}" \
+            --team-id "${{ env.APPLE_TEAM_ID }}" \
+            --wait
+          xcrun stapler staple "$DMG"
+          echo "Notarization complete: $DMG"
 
       - name: send file to rdgen server
         if: ${{ env.rdgen == 'true' }}
