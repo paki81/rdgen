@@ -473,7 +473,9 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          sed -i -e 's|com.carriez.flutter_hbb|${{ env.androidappid }}|' ./flutter/android/app/build.gradle
+          # Only change applicationId; namespace must stay com.carriez.flutter_hbb
+          # or generated R class moves package and Kotlin sources fail to compile
+          sed -i -e 's|applicationId "com.carriez.flutter_hbb"|applicationId "${{ env.androidappid }}"|' ./flutter/android/app/build.gradle
 
       - name: change download link to custom
         if: env.downloadLink != 'https://rustdesk.com/download'
