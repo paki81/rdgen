@@ -18,6 +18,11 @@ on:
         required: false
         default: ''
         type: string
+      app_version:
+        description: 'custom app version string (overrides build version)'
+        required: false
+        default: ''
+        type: string
 
 env:
   SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
@@ -32,9 +37,9 @@ env:
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"  # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
   TAG_NAME: "${{ inputs.upload-tag }}"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_BINARY_SOURCES: "clear"
   # vcpkg version: 2024.07.12
-  VCPKG_COMMIT_ID: "${{ inputs.version == 'master' && '9e593bb18ea69cc5095e012465dcd675a822ed0d' || '120deac3062162151622ca4860575a33844ba10b' }}"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   ARMV7_VCPKG_COMMIT_ID: "6f29f12e82a8293156836ad81cc9bf5af41fe836"
   VERSION: "${{ inputs.version }}"
   NDK_VERSION: "r28c"
@@ -86,14 +91,16 @@ jobs:
               target: x86_64-apple-darwin,
               os: macos-15-intel, #macos-latest or macos-14 use M1 now, https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#:~:text=14%20GB-,macos%2Dlatest%20or%20macos%2D14,-The%20macos%2Dlatestlabel
               extra-build-args: "",
+              extra-cargo-features: "",
               arch: x86_64,
               vcpkg-triplet: x64-osx,
             }
           - {
               target: aarch64-apple-darwin,
-              os: macos-14,
+              os: macos-15,
               # extra-build-args: "--disable-flutter-texture-render", # disable this for mac, because we see a lot of users reporting flickering both on arm and x64, and we can not confirm if texture rendering has better performance if htere is no vram, https://github.com/rustdesk/rustdesk/issues/6296
               extra-build-args: "--screencapturekit",
+              extra-cargo-features: ",screencapturekit",
               arch: aarch64,
               vcpkg-triplet: arm64-osx,
             }
@@ -144,6 +151,26 @@ jobs:
         with:
             repository: rustdesk/rustdesk
             submodules: recursive
+
+      - name: Set custom app version
+        continue-on-error: true
+        if: ${{ inputs.app_version != '' }}
+        shell: bash
+        run: |
+          sed -i -e 's|^version = ".*"|version = "${{ inputs.app_version }}"|' ./Cargo.toml
+          sed -i '/name = "rustdesk"/ {n; s/version = ".*"/version = "${{ inputs.app_version }}"/}' ./Cargo.lock
+          grep '^version = ' ./Cargo.toml
+
+      - name: Apply allow_custom_update patch
+        continue-on-error: true
+        if: ${{ env.update_public_key != '' }}
+        shell: bash
+        run: |
+          curl -sSL -o allow_custom_update.py https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/allow_custom_update.py
+          python3 allow_custom_update.py \
+            --rustdesk-root . \
+            --update-url "${{ env.downloadLink}}/api/version/latest" \
+            --ed25519-public-key "${{ env.update_public_key }}"
 
       - name: Install imagemagick and potrace and nasm and and
         shell: bash
@@ -518,7 +545,7 @@ jobs:
         if: env.removeNewVersionNotif == 'true'
         run: | 
           sed -i -e 's|updateUrl.isNotEmpty|false|' ./flutter/lib/desktop/pages/desktop_home_page.dart
-          sed -i '' '/let (request, url) =/,/Ok(())/{/Ok(())/!d;}' ./src/common.rs
+          #sed -i '/let (request, url) =/,/Ok(())/{/Ok(())/!d}' ./src/common.rs
 
       - name: Restore bridge files
         uses: actions/download-artifact@master
@@ -526,7 +553,15 @@ jobs:
           name: bridge-artifact
           path: ./
 
-      - name: Setup vcpkg with Github Actions binary cache
+      - name: Restore vcpkg installed cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/installed
+          key: vcpkg-macos-${{ env.VCPKG_COMMIT_ID }}-${{ matrix.job.vcpkg-triplet }}
+          restore-keys: |
+            vcpkg-macos-${{ env.VCPKG_COMMIT_ID }}-
+
+      - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
@@ -547,6 +582,13 @@ jobs:
             exit 1
           fi
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
+
+      - name: Save vcpkg installed cache
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/installed
+          key: vcpkg-macos-${{ env.VCPKG_COMMIT_ID }}-${{ matrix.job.vcpkg-triplet }}
 
       - name: Create MacOS directory structure
         run: |
